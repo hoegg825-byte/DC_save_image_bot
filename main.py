@@ -39,20 +39,25 @@ conn.commit()
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def init_drive_service():
-    """使用個人 OAuth 憑證登入 Google Drive，避免 Service Account 配額問題"""
+    """使用個人 OAuth 憑證登入 Google Drive"""
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists('credentials.json'):
-                raise FileNotFoundError("找不到 credentials.json！請至 Google Cloud Console 下載桌面應用程式憑證。")
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        
+    # 若凭證已過期，使用 refresh_token 自動在背景換發新憑證 (雲端可正常執行)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    elif not creds or not creds.valid:
+        # 若在無瀏覽器的伺服器環境中且無 token.json
+        if not os.path.exists('token.json'):
+            raise FileNotFoundError(
+                "❌ 伺服器上找不到 'token.json'！\n"
+                "因為雲端無桌面瀏覽器，請先在個人電腦執行取得 'token.json' 後，手動上傳至伺服器根目錄。"
+            )
+        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+        creds = flow.run_local_server(port=0)
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
 
