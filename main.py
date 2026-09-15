@@ -288,6 +288,77 @@ async def delete_image(interaction: discord.Interaction, 圖片名稱: str):
         print(f"[錯誤] 刪除失敗：\n{e}")
         await interaction.followup.send(f"刪除時發生錯誤：\n{e}")
 
+# ================= Google Drive 全量同步函式 =================
+def sync_database_from_drive_sync():
+    """遍歷 Google Drive 指定資料夾，將所有圖片記錄還原至本地 SQLite"""
+    query = f"'{FOLDER_ID}' in parents and trashed = false"
+    page_token = None
+    restored_count = 0
+
+    # 使用獨立連線以確保執行緒安全
+    with sqlite3.connect('images.db') as db:
+        cur = db.cursor()
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                drive_id TEXT
+            )
+        ''')
+        db.commit()
+
+        while True:
+            response = drive_service.files().list(
+                q=query,
+                spaces='drive',
+                fields='nextPageToken, files(id, name)',
+                pageToken=page_token,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
+            ).execute()
+
+            files = response.get('files', [])
+            for file in files:
+                drive_id = file.get('id')
+                name = file.get('name')
+                
+                # 排除可能混入的非圖片子資料夾或空名稱
+                if name and drive_id:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO images (name, drive_id) VALUES (?, ?)",
+                        (name, drive_id)
+                    )
+                    if cur.rowcount > 0:
+                        restored_count += 1
+
+            db.commit()
+            page_token = response.get('nextPageToken', None)
+            if not page_token:
+                break
+
+    return restored_count
+
+# ================= 4. 同步指令：/同步雲端 =================
+@bot.tree.command(name="同步雲端", description="從 Google Drive 還原並同步所有圖片資料至本地資料庫")
+@app_commands.default_permissions(administrator=True)  # 僅限管理員使用
+async def sync_drive_command(interaction: discord.Interaction):
+    # 此動作需要遍歷 GDrive API，務必預先延遲回應 (defer)
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        count = await asyncio.to_thread(sync_database_from_drive_sync)
+        await interaction.followup.send(
+            f"✅ 同步完成！已成功還原 / 補齊 `{count}` 筆圖片記錄至資料庫。",
+            ephemeral=True
+        )
+    except Exception as e:
+        print(f"[錯誤] 同步雲端資料失敗: {e}")
+        await interaction.followup.send(
+            f"❌ 同步失敗，發生錯誤：`{e}`",
+            ephemeral=True
+        )
+
+
 # ================= 啟動執行 =================
 if __name__ == '__main__':
     bot.run(TOKEN)
